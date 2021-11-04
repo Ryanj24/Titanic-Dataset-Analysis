@@ -1,0 +1,341 @@
+---
+title: "A Statistical Analysis of the Titanic Dataset"
+author: "Ryan Jackson"
+date: "03/11/2021"
+output: 
+  pdf_document:
+    latex_engine: xelatex
+    number_sections: yes
+fig_caption: yes
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r LibsandCode, include=FALSE}
+
+library(dplyr)
+library(ggplot2)
+library(moderndive)
+library(gapminder)
+library(sjPlot)
+library(stats)
+library(readr)
+library(janitor)
+library(kableExtra)
+library(gridExtra)
+library(MASS)
+library(caTools)
+library(class)
+library(psych)
+library(ROCR)
+
+
+titanic_data <- read.csv("titanic_train.csv")
+titanic_data <- titanic_data[,c("Survived", "Pclass", "Sex", "Age", "SibSp", "Parch", "Fare", "Embarked")]
+
+```
+
+
+
+# Introduction {#sec:intro}
+
+When it comes to the world of Data Science and Machine Learning, there are many datasets that are popular all over the world but probably none more so than the Titanic dataset which contains information on the fate of passengers aboard the infamous British ocean liner which tragically sank on $15^{th}$ April 1942 after striking an iceberg on its maiden voyage from Southampton to New York City. The data was obtained from the popular online data science community [Kaggle](https://www.kaggle.com/c/titanic) and contains information on whether passengers survied or not, their sex, age, what class they were in, whether they had siblings/parents/children aboard, what fare they paid for their ticket and where they embarked from.
+In this analysis we begin by examining the raw data in Section \ref{sec:DataClean} and doing some data cleaning to ensure it is appropriate for use. In Section \ref{sec:eda} we then visualise the data to try and assess whether any of the variables in the dataset appear to have an effect on whether passengers survived or not. We then apply a Logistic Regression classifier to our data in Section \ref{sec:LogReg} and assess its classification performance. Concluding remarks on the data and the analysis are then presented in Section \ref{sec:conc}. 
+
+
+# Data Cleaning {#sec:DataClean}
+
+As mentioned above, before we can begin visualising our data and fitting our classification method, it is important that we ensure the data is useable for our analysis and our first step is to make sure all our variables are of the appropriate data type. When examining the data, we see that the Survived and Pclass variables which correspond to whether a passenger survived or not (1 or 0) and the class they belonged to (either $1^{st}$, $2^{nd}$ or $3^{rd}$) are given as integers instead of factors so that will be our first change.
+
+```{r dataclean, eval = TRUE,echo=FALSE, warning=FALSE, message=FALSE}
+
+titanic_data$Survived <- as.factor(titanic_data$Survived)
+titanic_data$Pclass <- as.factor(titanic_data$Pclass)
+titanic_data$Embarked <- as.factor(titanic_data$Embarked)
+
+```
+
+After that change, we now look to missing values in the dataset and in order to give a wholistic view of the number of missing values we can observe Table \ref{tab:MissingVals1} below
+
+```{r MissValsTab, eval = TRUE, echo=FALSE, warning=FALSE, message=FALSE}
+
+Missing.Values <- rbind(sapply(titanic_data, function(x) sum(is.na(x))))
+
+kable(Missing.Values, format = "latex", booktabs = TRUE, caption = '\\label{tab:MissingVals1} Count of Missing Values for each Variable.') %>%
+  kable_styling(latex_options = "hold_position", font_size = 11)
+
+
+```
+
+As we can see there are no missing values for 7 of the 8 variables but for the Age variable we have 177 missing values which is a pretty considerable number meaning that if we were to simply remove these rows with the missing values we would likely be dealing with a large loss of information thus, instead we will use a technique known as _imputation_. For this technique what we will do is look at the average and median age of passengers in each passenger class since we know there are no missing values for that variable and depending on what class each passenger with a missing age belongs to, we'll apply either the average or median age of their class to them. Table \ref{tab:AvgMedAges} below shows us the average ages by class
+
+```{r AvgMedAge, eval = TRUE, message=FALSE, echo=FALSE, message=FALSE}
+
+Avg_Age_Pclass <- titanic_data %>%
+  group_by(Pclass) %>%
+  dplyr::select(Age) %>%
+  summarise(mean = round(mean(Age, na.rm = TRUE), digits = 2), median = median(Age, na.rm = TRUE))
+
+colnames(Avg_Age_Pclass) <- c("Class", "Average Age", "Median Age")
+
+
+kable(Avg_Age_Pclass, format = "latex", booktabs = TRUE, caption = "\\label{tab:AvgMedAges} Average and Median Age of Passengers in each Class.") %>%
+  kable_styling(latex_options = "hold_position", font_size = 11)
+
+```
+
+So from Table \ref{tab:AvgMedAges} we see firstly that the average and median ages don't appear to be hugely different suggesting that we aren't dealing with heavily skewed data and so it would be appropriate here to just use the mean age instead of the median. We can also observe that those in $1^{st}$ class are on average quite a bit older than those in $2^{nd}$ who are in turn slightly older than those in $3^{rd}$ class. So we can take these average ages and apply them to those passengers in the respective classes that have a missing age value.
+
+```{r AgeImputation, eval=TRUE, echo=FALSE}
+
+titanic_data$Age <- ifelse((is.na(titanic_data$Age)) & (titanic_data$Pclass == 1), Avg_Age_Pclass[1,2],
+                           titanic_data$Age)
+
+titanic_data$Age <- ifelse((is.na(titanic_data$Age)) & (titanic_data$Pclass == 2), Avg_Age_Pclass[2,2],
+                           titanic_data$Age)
+
+titanic_data$Age <- ifelse((is.na(titanic_data$Age)) & (titanic_data$Pclass == 3), Avg_Age_Pclass[3,2],
+                           titanic_data$Age)
+
+titanic_data$Age <- as.numeric(titanic_data$Age)
+titanic_data$Age <- round(titanic_data$Age, digits = 0)
+
+```
+
+```{r complete-data, eval=TRUE, echo=FALSE}
+
+titanic_data <- titanic_data[complete.cases(titanic_data),]
+
+
+titanic_data <- titanic_data[-c(62,830),]
+
+```
+
+Doing a final check on the missing values in Table \ref{tab:MissingVals2} below we see that the steps outlined above to impute the values of the average age of each class to those passengers whose age was missing from the dataset have worked successfully.
+
+```{r MissValsTab2, eval = TRUE, echo=FALSE, warning=FALSE, message=FALSE}
+
+Missing.Values2 <- rbind(sapply(titanic_data, function(x) sum(is.na(x))))
+
+kable(Missing.Values2, format = "latex", booktabs = TRUE, caption = '\\label{tab:MissingVals2} Count of Missing Values for each Variable.') %>%
+  kable_styling(latex_options = "hold_position", font_size = 11)
+
+
+```
+
+# Exploratory Analysis {#sec:eda}
+
+Now that our data has been cleaned and is in working order, we can begin to explore it in more detail with various visualisations. The first two visualisations are shown below in Figure \ref{fig:plots1},
+
+```{r Viz1, eval=TRUE, message=FALSE, warning=FALSE, echo=FALSE, fig.align="center", fig.pos="H", fig.cap="\\label{fig:plots1} Bar Plots of the Percentage of Survivors by Gender (L) and Passenger Ticket Class (R).", fig.height= 3}
+
+p1 <- ggplot(titanic_data, aes(x = Survived, group = Sex)) +
+  geom_bar(aes(y = ..prop..*100, fill = Sex), position = "dodge") +
+  labs(x = "Died (0) or Survived (1)", y = "Percentage (%)") +
+  scale_y_continuous(labels = scales::percent_format(scale = 1)) +
+  scale_x_discrete(labels = c("Died", "Survived")) +
+  scale_fill_discrete(labels = c("Female", "Male"))
+  
+
+p2 <- ggplot(titanic_data, aes(x = Survived, group = Pclass)) +
+  geom_bar(aes(y = ..prop..*100, fill = Pclass), position = "dodge") +
+  labs(x = "Died (0) or Survived (1)", y = "Percentage (%)") +
+  scale_y_continuous(labels = scales::percent_format(scale = 1)) +
+  scale_x_discrete(labels = c("Died", "Survived")) +
+  scale_fill_discrete(name = "Class", labels = c("1st", "2nd", "3rd"))
+
+grid.arrange(p1, p2, ncol = 2)
+
+
+```
+
+
+To the left of Figure \ref{fig:plots1} we have a bar chart of the percentage of passengers that died and those that survived grouped by their gender. We see that of those passengers who were female, roughly 25% of them died and about 75% survived whereas for males aboard the Titanic, just over 80% of them died and slightly under 20% survived. This represents a huge discrepancy between the two genders and could likely be due to women being given priority for spots on the limited number of lifeboats.
+On the right of Figure \ref{fig:plots1} we see the same plot as that on the left however this time we have a breakdown of the percentage of passengers who died or survived based on their passenger class. The plot shows us that the passengers who survived the most came from $1^{st}$ class where just over 60% survived whereas only about 48% of those in $2^{nd}$ class survived and about 24% of those in $3^{rd}$ class survived.
+
+Another point of interest for our analysis is to see how the ages differ of those passengers who died and those who survived, we can see that to the left of Figure \ref{fig:plots2} below that the ages between those that died and those that survived don't differ by much. We can observe that theres a slight right skew for the passengers that died, that is, there may be more older passengers who died compared to those that survived although we do see some outliers at the upper whisker of the survived class.
+The plot on the right hand side of Figure \ref{fig:plots2} gives us slightly more detail with a breakdown by passenger class where we can see that the passengers in $1^{st}$ class do appear to be older than those in the other two classes but those in $1^{st}$ class that died on the Titanic were older on average compared to those that survived. For passengers in $2^{nd}$ class, there it seems to be a bit more even when it comes to the ages of those that died and survied with those having died being ever so slightly older on average. Lastly for those in $3^{rd}$ 
+class there is a much greater spread when it comes to the ages of those who died and survived - especially for the passengers that died where we see a huge right-skew suggesting those that died were on average older passengers - but when it comes to those that survived we see a huge left-skew suggesting those that survived from $3^{rd}$ class were on average younger passengers.
+
+
+```{r Viz2, eval=TRUE, message=FALSE, warning=FALSE, echo=FALSE, fig.align="center", fig.pos="H", fig.cap="\\label{fig:plots2} Boxplots of the Ages of Passengers who Died and Survived (L) and by Passenger Class (R).", fig.height= 3}
+
+p3 <- 
+  ggplot(titanic_data, aes(x = Survived, y = Age)) +
+  geom_boxplot(aes(fill = Survived)) +
+  labs(x = "Died (0) or Survived (1)", y = "Age (years)") +
+  scale_x_discrete(labels = c("Died", "Survived")) +
+  scale_fill_discrete(name = "Status", labels = c("Died", "Survived"))
+  
+
+p4 <- ggplot(titanic_data, aes(x = Pclass, y = Age)) +
+  geom_boxplot(aes(fill = Survived)) +
+  labs(x = "Passenger Class", y = "Age (years)") +
+  scale_x_discrete(labels = c("1st", "2nd", "3rd")) +
+  scale_fill_discrete(name = "Status", labels = c("Died", "Survived"))
+
+
+grid.arrange(p3, p4, ncol = 2)
+
+```
+
+Our final visualisation for this section is displayed in Figure \ref{fig:plots3} where we have boxplots showing the Fare prices paid depending on where passengers embarked the Titanic and whether they died or survived.
+
+```{r Viz3, eval=TRUE, message=FALSE, warning=FALSE, echo=FALSE, fig.align="center", fig.pos="H", fig.cap="\\label{fig:plots3} Boxplots of the Fare Price by Embarked Location and Survival Status", fig.height= 3}
+
+ggplot(titanic_data, aes(x = Embarked, y = Fare)) +
+  geom_boxplot(aes(fill = Survived)) +
+  scale_x_discrete(labels = c("Cherbourg", "Queenstown", "Southampton")) +
+  scale_fill_discrete(name = "Status", labels = c("Died", "Survived")) +
+  labs(title = "Fare Price($) by Embarked Location and Survival Status")
+
+
+
+
+```
+
+
+Looking to Figure \ref{fig:plots3} we observe that of the three embarked locations, it appears as though Queenstown had the cheapest fare prices overall, followed by Southampton and then Cherbourg. When we examine the prices paid by passenger survival status, we begin to see a similar trend to that in Figure \ref{fig:plots1} which showed the higher the class of ticket you had, the greater the chance of survival. For passengers that embarked at Cherbourg we see that for those that survived, they paid a much greater ticket fare than those that died and this is broken down into a numerical summary in Table \ref{tab:Table3} which shows the mean fare price for those that died were\$35.44 whereas for those that survived, they paid \$79.72 on average. We do also see a huge difference between the median prices paid aswell. Looking at passengers who boarded in Queenstown, there isn't actually much of a difference between the groups with the mean prices for the died and survived groups being \$13.34 \& \$13.18 respectively. Similarly, the median fare prices are also inline with one another. We do see a slight difference for the two groups for those passengers that embarked in Southampton with the mean price paid for those who died being \$20.74 and \$39.55 for those that survived. Figure \ref{fig:plots3} does show quite a significant number of outliers which is what we would expect to see given passengers could pay for either $1^{st}$, $2^{nd}$ or $3^{rd}$ class tickets with more people likely being able to afford the lower two classes which would cost substantially less than $1^{st}$ class.
+
+```{r Tab3, eval = TRUE, include=TRUE, echo=FALSE, message=FALSE, warning=FALSE}
+
+MeanFare <- titanic_data %>%
+  group_by(Survived, Embarked) %>%
+  dplyr::select(Fare) %>%
+  summarise(mean = mean(Fare))
+
+Table1 <- xtabs(mean ~ Survived+Embarked, data=MeanFare)
+finaltable <-ftable(Table1)
+
+
+aaa <- as.matrix(finaltable)
+aaa <- aaa[,-1]
+row.names(aaa) <- c("Mean", "Mean")
+
+
+
+MedianFare <- titanic_data %>%
+  group_by(Survived, Embarked) %>%
+  dplyr::select(Fare) %>%
+  summarise(median = median(Fare))
+
+Table2 <- xtabs(median ~ Survived+Embarked, data=MedianFare)
+finaltable2 <-ftable(Table2)
+
+
+bbb <- as.matrix(finaltable2)
+bbb <- bbb[,-1]
+row.names(bbb) <- c("Median", "Median")
+
+
+ccc <- cbind(t(aaa), t(bbb))
+ccc <- t(ccc)
+
+ccc <- round(ccc[c(1,3,2,4),], digits = 2)
+
+kable(ccc, format = "latex", booktabs = TRUE, caption = '\\label{tab:Table3} Mean and Median Fare Prices for Embarked Location and Survival Status.') %>%
+  add_header_above(c(" " = 1, "Embarked Location" = 3)) %>%
+  kable_styling(latex_options = "hold_position", font_size = 11) %>%
+  group_rows("Died", 1, 2) %>%
+  group_rows("Survived", 3, 4)
+
+
+```
+
+
+
+
+
+# Logistic Regression Classifier {#sec:LogReg}
+
+The next stage of our analysis is the application and assessment of the Logistic Regression classifier but before we begin, we start by splitting our dataset into training and test sets in a 60%-40% split with 60% going to the training data and 40% going to the test data. The reasoning behind this is that we use the training data to fit our classification method and this is then used to predict the responses for the observations in the test set where we assess our models predictive performance.
+
+```{r DataSplit1, eval = TRUE, echo=FALSE, warning=FALSE, message=FALSE, include=FALSE}
+
+
+set.seed(500)
+
+split_data <- sample.split(titanic_data$Survived, SplitRatio = 0.6)                                      
+      
+training_set <- subset(titanic_data, split_data == TRUE)
+test_set <- subset(titanic_data, split_data == FALSE)
+                                      
+
+```
+
+
+We use a Logistic Regression model for our data here because the outcome variable- whether passengers survived or not- is binary and as such this model with a logit link function is appropriate. Our starting point for the model is to consider the fully saturated model, ie. the model containing all covariates in the dataset and we will then apply stepwise regression using both backwards elimination and forward selection to determine the optimal model. The final model deemed to be optimal will be the one which minimises the Akaike Information Criterion (AIC) score.
+
+```{r LogRegMod, eval=TRUE, echo=FALSE, warning=FALSE}
+
+
+full.model <- glm(Survived ~., data = training_set, family = binomial(link = "logit"))
+
+step.model <- stepAIC(full.model, direction = "both", trace = FALSE)
+
+# the best optimial model
+coeff <- round(coef(step.model),3)
+AIC <- step.model$anova[, 6]
+
+
+final_mod <- glm(Survived~Pclass + Sex + Age + SibSp, data = training_set, family = binomial(link = "logit"))
+
+
+
+```
+
+After fitting the model through the process described above, the optimal model returned an AIC score of `r round(min(AIC), digits = 0)` and contained the covariates Passenger Class, Sex, Age and the number of siblings/spouse onboard. This therefore means that the fare price paid by passengers, where they boarded the Titanic and the number of parents/children they had aboard the Titanic were not deemed to have a statistically significant effect on whether a passenger died or survived.
+We can now move to visualise the effects of the covariates in the final model on passenger survival below in Figure \ref{fig:plots4} 
+
+```{r Oddplot, eval=TRUE, include=TRUE, echo=FALSE, warning=FALSE, message=FALSE, fig.align="center", fig.pos="H", fig.cap="\\label{fig:plots4} Effect of each Covariate on Odds of Survival.", out.width="80%"}
+
+
+plot_model(final_mod, show.values = TRUE, title = "Odds of Survival", show.p = FALSE, value.offset = 0.25)
+
+
+
+```
+
+From Figure \ref{fig:plots4} we see that the odds of survival for those passengers in $2^{nd}$ class and $3^{rd}$ class are on average `r round((1-exp(coeff[2])) * 100, digits = 0)`% & `r round((1-exp(coeff[3])) * 100, digits = 0)`% less than those passengers in $1^{st}$ class. This represents a huge decrease in the odds of survival and perhaps may be due to the $1^{st}$ class lounges being higher up on the ship so it took longer for the water to reach them or they may have perhaps been given preferential treatment when it came to boarding the life boats. We also observe that the odds of survival for those passengers who were male are `r round((1-exp(coeff[4])) * 100, digits = 0)`% lower than female passengers and that for every year increase in the age of passengers, the odds of survival are about `r round((1-exp(coeff[5])) * 100, digits = 0)`% lower on average. Similarly, for every extra spouse/sibling a passenger had aboard the Titanic their odds of survival decreased by roughly `r round((1-exp(coeff[6])) * 100, digits = 0)`% which could be likely due to them wanting to make sure they don't leave a family member behind before trying to disembark which could take valuable time.
+
+We can now use our model to predict the probability and class that each passenger in the test set belongs to. In order to do so, we need to set a classification threshold/cut-off probability which in this case we make 0.5 so that if for example the probability of a passenger being assigned to the survived group is less than 0.5 then they are assigned to the died group and if greater than 0.5 then they are assigned to the survived group.
+
+```{r pred1, eval = TRUE, echo=FALSE, warning=FALSE, message=FALSE}
+
+LogReg_pred_class <- predict(final_mod, test_set[,-1], type = "response")
+
+#Set cut-off of 50%
+LogReg_pred_class <- ifelse(LogReg_pred_class < 0.5, "0", "1")
+
+
+```
+
+
+
+```{r LogRegCCR, eval = TRUE, echo=FALSE, include=TRUE, warning=FALSE, message=FALSE}
+
+LogReg_true_class <- test_set$Survived
+
+a <- as.matrix(table(LogReg_pred_class, LogReg_true_class))
+
+
+
+a %>%
+  addmargins() %>%
+  kable(format = "latex", booktabs = TRUE, caption = "\\label{tab:CCR} Confusion Matrix of Ture and Predicted Class of Observations.") %>%
+  kable_styling(latex_options = "hold_position")
+
+
+
+
+
+```
+
+Above in Table \ref{tab:CCR}, we have a confusion matrix where we have the true classes as the columns and predicted classes as the rows and as we can see, it appears as though this Logistic Regression model with a cut-off of 0.5 has performed pretty well by correctly classifying `r a[1,1]` observations to the died group and correctly classifying `r a[2,2]` observations as belonging to the survived class. This therefore gives the classifier a Correct Classification Rate (CCR) of `r round(((a[1,1] + a[2,2]) / (a[1,1] + a[1,2] + a[2,1] + a[2,2])) * 100, digits = 0)`% and a misclassification rate (MCR) of `r round(((a[1,2] + a[2,1]) / (a[1,1] + a[1,2] + a[2,1] + a[2,2])) * 100, digits = 0)`%.
+
+
+# Conclusion {#sec:conc}
+
+In conclusion, it appears as though all the covariates considered in this analysis played somewhat of a significant role in the survival status of passengers aboard the Titanic. Arguably the biggest factors that determined the survival status were the passenger ticket class and the sex of the passenger as the plots in Figures \ref{fig:plots1} show and also as suggested by the Logistic Regression model. The Logistic Regression model used for this analysis overall performed very well by correctly classifying `r round(((a[1,1] + a[2,2]) / (a[1,1] + a[1,2] + a[2,1] + a[2,2])) * 100, digits = 0)`% of the observations. To further improve this analysis in the future, we could consider the use of other classification methods such as K-Nearest Neighbours, Support Vector Machines and Random Forests, this would then allow us to form a comparison between the classifiers and understand what would be the best for these data.
