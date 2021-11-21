@@ -1,0 +1,324 @@
+---
+title: "A Statistical Analysis of the Titanic Dataset"
+author: "Ryan Jackson"
+date: "03/11/2021"
+output: 
+  pdf_document:
+    latex_engine: xelatex
+    number_sections: yes
+fig_caption: yes
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r LibsandCode, include=FALSE}
+
+library(dplyr)
+library(ggplot2)
+library(moderndive)
+library(gapminder)
+library(sjPlot)
+library(stats)
+library(readr)
+library(janitor)
+library(kableExtra)
+library(gridExtra)
+library(MASS)
+library(caTools)
+library(class)
+library(psych)
+library(ROCR)
+
+
+titanic_data <- read.csv("titanic_train.csv")
+titanic_data <- titanic_data[,c("Survived", "Pclass", "Sex", "Age", "SibSp", "Parch", "Fare", "Embarked")]
+
+```
+
+
+
+# Introduction {#sec:intro}
+
+
+# Data Cleaning {#sec:DataClean}
+
+
+
+```{r dataclean, eval = TRUE,echo=FALSE, warning=FALSE, message=FALSE}
+
+titanic_data$Survived <- as.factor(titanic_data$Survived)
+titanic_data$Pclass <- as.factor(titanic_data$Pclass)
+titanic_data$Embarked <- as.factor(titanic_data$Embarked)
+
+```
+
+
+```{r MissValsTab, eval = TRUE, echo=FALSE, warning=FALSE, message=FALSE}
+
+Missing.Values <- rbind(sapply(titanic_data, function(x) sum(is.na(x))))
+
+kable(Missing.Values, format = "latex", booktabs = TRUE, caption = '\\label{tab:MissingVals1} Count of Missing Values for each Variable.') %>%
+  kable_styling(latex_options = "hold_position", font_size = 11)
+
+
+```
+
+
+
+```{r AvgMedAge, eval = TRUE, message=FALSE, echo=FALSE, message=FALSE}
+
+Avg_Age_Pclass <- titanic_data %>%
+  group_by(Pclass) %>%
+  dplyr::select(Age) %>%
+  summarise(mean = round(mean(Age, na.rm = TRUE), digits = 2), median = median(Age, na.rm = TRUE))
+
+colnames(Avg_Age_Pclass) <- c("Class", "Average Age", "Median Age")
+
+
+kable(Avg_Age_Pclass, format = "latex", booktabs = TRUE, caption = "\\label{tab:AvgMedAges} Average and Median Age of Passengers in each Class.") %>%
+  kable_styling(latex_options = "hold_position", font_size = 11)
+
+```
+
+
+
+```{r AgeImputation, eval=TRUE, echo=FALSE}
+
+titanic_data$Age <- ifelse((is.na(titanic_data$Age)) & (titanic_data$Pclass == 1), Avg_Age_Pclass[1,2],
+                           titanic_data$Age)
+
+titanic_data$Age <- ifelse((is.na(titanic_data$Age)) & (titanic_data$Pclass == 2), Avg_Age_Pclass[2,2],
+                           titanic_data$Age)
+
+titanic_data$Age <- ifelse((is.na(titanic_data$Age)) & (titanic_data$Pclass == 3), Avg_Age_Pclass[3,2],
+                           titanic_data$Age)
+
+titanic_data$Age <- as.numeric(titanic_data$Age)
+titanic_data$Age <- round(titanic_data$Age, digits = 0)
+
+```
+
+
+```{r complete-data, eval=TRUE, echo=FALSE}
+
+titanic_data <- titanic_data[complete.cases(titanic_data),]
+
+
+titanic_data <- titanic_data[-c(62,830),]
+
+```
+
+
+
+```{r MissValsTab2, eval = TRUE, echo=FALSE, warning=FALSE, message=FALSE}
+
+Missing.Values2 <- rbind(sapply(titanic_data, function(x) sum(is.na(x))))
+
+kable(Missing.Values2, format = "latex", booktabs = TRUE, caption = '\\label{tab:MissingVals2} Count of Missing Values for each Variable.') %>%
+  kable_styling(latex_options = "hold_position", font_size = 11)
+
+
+```
+
+# Exploratory Analysis {#sec:eda}
+
+
+```{r Viz1, eval=TRUE, message=FALSE, warning=FALSE, echo=FALSE, fig.align="center", fig.pos="H", fig.cap="\\label{fig:plots1} Bar Plots of the Percentage of Survivors by Gender (L) and Passenger Ticket Class (R).", fig.height= 3}
+
+p1 <- ggplot(titanic_data, aes(x = Survived, group = Sex)) +
+  geom_bar(aes(y = ..prop..*100, fill = Sex), position = "dodge") +
+  labs(x = "Died (0) or Survived (1)", y = "Percentage (%)") +
+  scale_y_continuous(labels = scales::percent_format(scale = 1)) +
+  scale_x_discrete(labels = c("Died", "Survived")) +
+  scale_fill_discrete(labels = c("Female", "Male"))
+  
+
+p2 <- ggplot(titanic_data, aes(x = Survived, group = Pclass)) +
+  geom_bar(aes(y = ..prop..*100, fill = Pclass), position = "dodge") +
+  labs(x = "Died (0) or Survived (1)", y = "Percentage (%)") +
+  scale_y_continuous(labels = scales::percent_format(scale = 1)) +
+  scale_x_discrete(labels = c("Died", "Survived")) +
+  scale_fill_discrete(name = "Class", labels = c("1st", "2nd", "3rd"))
+
+grid.arrange(p1, p2, ncol = 2)
+
+
+```
+
+
+
+
+
+```{r Viz2, eval=TRUE, message=FALSE, warning=FALSE, echo=FALSE, fig.align="center", fig.pos="H", fig.cap="\\label{fig:plots2} Boxplots of the Ages of Passengers who Died and Survived (L) and by Passenger Class (R).", fig.height= 3}
+
+p3 <- 
+  ggplot(titanic_data, aes(x = Survived, y = Age)) +
+  geom_boxplot(aes(fill = Survived)) +
+  labs(x = "Died (0) or Survived (1)", y = "Age (years)") +
+  scale_x_discrete(labels = c("Died", "Survived")) +
+  scale_fill_discrete(name = "Status", labels = c("Died", "Survived"))
+  
+
+p4 <- ggplot(titanic_data, aes(x = Pclass, y = Age)) +
+  geom_boxplot(aes(fill = Survived)) +
+  labs(x = "Passenger Class", y = "Age (years)") +
+  scale_x_discrete(labels = c("1st", "2nd", "3rd")) +
+  scale_fill_discrete(name = "Status", labels = c("Died", "Survived"))
+
+
+grid.arrange(p3, p4, ncol = 2)
+
+```
+
+
+
+```{r Viz3, eval=TRUE, message=FALSE, warning=FALSE, echo=FALSE, fig.align="center", fig.pos="H", fig.cap="\\label{fig:plots3} Boxplots of the Fare Price by Embarked Location and Survival Status", fig.height= 3}
+
+ggplot(titanic_data, aes(x = Embarked, y = Fare)) +
+  geom_boxplot(aes(fill = Survived)) +
+  scale_x_discrete(labels = c("Cherbourg", "Queenstown", "Southampton")) +
+  scale_fill_discrete(name = "Status", labels = c("Died", "Survived")) +
+  labs(title = "Fare Price($) by Embarked Location and Survival Status")
+
+
+
+
+```
+
+
+
+```{r Tab3, eval = TRUE, include=TRUE, echo=FALSE, message=FALSE, warning=FALSE}
+
+MeanFare <- titanic_data %>%
+  group_by(Survived, Embarked) %>%
+  dplyr::select(Fare) %>%
+  summarise(mean = mean(Fare))
+
+Table1 <- xtabs(mean ~ Survived+Embarked, data=MeanFare)
+finaltable <-ftable(Table1)
+
+
+aaa <- as.matrix(finaltable)
+aaa <- aaa[,-1]
+row.names(aaa) <- c("Mean", "Mean")
+
+
+
+MedianFare <- titanic_data %>%
+  group_by(Survived, Embarked) %>%
+  dplyr::select(Fare) %>%
+  summarise(median = median(Fare))
+
+Table2 <- xtabs(median ~ Survived+Embarked, data=MedianFare)
+finaltable2 <-ftable(Table2)
+
+
+bbb <- as.matrix(finaltable2)
+bbb <- bbb[,-1]
+row.names(bbb) <- c("Median", "Median")
+
+
+ccc <- cbind(t(aaa), t(bbb))
+ccc <- t(ccc)
+
+ccc <- round(ccc[c(1,3,2,4),], digits = 2)
+
+kable(ccc, format = "latex", booktabs = TRUE, caption = '\\label{tab:Table3} Mean and Median Fare Prices for Embarked Location and Survival Status.') %>%
+  add_header_above(c(" " = 1, "Embarked Location" = 3)) %>%
+  kable_styling(latex_options = "hold_position", font_size = 11) %>%
+  group_rows("Died", 1, 2) %>%
+  group_rows("Survived", 3, 4)
+
+
+```
+
+
+
+
+
+# Logistic Regression Classifier {#sec:LogReg}
+
+
+```{r DataSplit1, eval = TRUE, echo=FALSE, warning=FALSE, message=FALSE, include=FALSE}
+
+
+set.seed(500)
+
+split_data <- sample.split(titanic_data$Survived, SplitRatio = 0.6)                                      
+      
+training_set <- subset(titanic_data, split_data == TRUE)
+test_set <- subset(titanic_data, split_data == FALSE)
+                                      
+
+```
+
+
+
+```{r LogRegMod, eval=TRUE, echo=FALSE, warning=FALSE}
+
+
+full.model <- glm(Survived ~., data = training_set, family = binomial(link = "logit"))
+
+step.model <- stepAIC(full.model, direction = "both", trace = FALSE)
+
+# the best optimial model
+coeff <- round(coef(step.model),3)
+AIC <- step.model$anova[, 6]
+
+
+final_mod <- glm(Survived~Pclass + Sex + Age + SibSp, data = training_set, family = binomial(link = "logit"))
+
+
+
+```
+
+
+```{r Oddplot, eval=TRUE, include=TRUE, echo=FALSE, warning=FALSE, message=FALSE, fig.align="center", fig.pos="H", fig.cap="\\label{fig:plots4} Effect of each Covariate on Odds of Survival.", out.width="80%"}
+
+
+plot_model(final_mod, show.values = TRUE, title = "Odds of Survival", show.p = FALSE, value.offset = 0.25)
+
+
+
+```
+
+
+
+```{r pred1, eval = TRUE, echo=FALSE, warning=FALSE, message=FALSE}
+
+LogReg_pred_class <- predict(final_mod, test_set[,-1], type = "response")
+
+#Set cut-off of 50%
+LogReg_pred_class <- ifelse(LogReg_pred_class < 0.5, "0", "1")
+
+
+```
+
+
+
+```{r LogRegCCR, eval = TRUE, echo=FALSE, include=TRUE, warning=FALSE, message=FALSE}
+
+LogReg_true_class <- test_set$Survived
+
+a <- as.matrix(table(LogReg_pred_class, LogReg_true_class))
+
+
+
+a %>%
+  addmargins() %>%
+  kable(format = "latex", booktabs = TRUE, caption = "\\label{tab:CCR} Confusion Matrix of Ture and Predicted Class of Observations.") %>%
+  kable_styling(latex_options = "hold_position")
+
+
+
+
+
+```
+
+
+
+
+# Conclusion {#sec:conc}
+
